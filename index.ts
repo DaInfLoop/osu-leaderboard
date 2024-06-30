@@ -293,7 +293,32 @@ app.command('/osu-profile', async (ctx) => {
 
         if (!cache.find(u => u.slackId == slackProfile.id)) {
             return ctx.respond({
-                text: `${slackProfile.profile!.display_name_normalized} doesn't seem to have an osu! account linked. You might have to wait a bit for my cache to reload though.`
+                response_type: 'in_channel',
+                text: `${userProfile.display_name_normalized} ran /osu-profile @${slackProfile.profile!.display_name_normalized}`,
+                blocks: [
+                    {
+                        "type": "context",
+                        "elements": [
+                            {
+                                "type": "mrkdwn",
+                                "text": `<@${ctx.context.userId}> ran \`/osu-profile\` | Matched by slack user`
+                            }
+                        ]
+                    },
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": `*Slack Username*: <https://hackclub.slack.com/team/${slackProfile.id}|${slackProfile.profile!.display_name_normalized}>\n*osu! username:* Not linked`
+                        },
+                        "accessory": {
+                            "type": "image",
+                            "image_url": 'https://osu.ppy.sh/images/layout/avatar-guest@2x.png',
+                            "alt_text": `default osu profile picture`
+                        }
+                    }
+
+                ]
             })
         }
 
@@ -318,8 +343,41 @@ app.command('/osu-profile', async (ctx) => {
         const cached = cache.find(u => u.username.toLowerCase() == arg.toLowerCase())
 
         if (!cached) {
+            const token = await getTemporaryToken();
+
+            const osuProfile = await fetch(`https://osu.ppy.sh/api/v2/users/${arg}?key=username`, {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            }).then(res => res.json());
+
             return ctx.respond({
-                text: `${arg} doesn't seem to have an slack account linked. You might have to wait a bit for my cache to reload though.`
+                response_type: 'in_channel',
+                text: `${userProfile.display_name_normalized} ran /osu-profile ${arg}`,
+                blocks: [
+                    {
+                        "type": "context",
+                        "elements": [
+                            {
+                                "type": "mrkdwn",
+                                "text": `<@${ctx.context.userId}> ran \`/osu-profile\` | Matched by osu! username`
+                            }
+                        ]
+                    },
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": `*Slack Username*: Not linked\n*osu! username:* <https://osu.ppy.sh/users/${osuProfile.id}|${osuProfile.username}>`
+                        },
+                        "accessory": {
+                            "type": "image",
+                            "image_url": osuProfile.avatar_url,
+                            "alt_text": `${osuProfile.username}'s osu profile picture`
+                        }
+                    }
+
+                ]
             })
         }
 
@@ -463,7 +521,7 @@ app.command('/osu-leaderboard', async (ctx) => {
                             "value": "mania"
                         }
                     ],
-                    "action_id": "change-leaderboard|"+ctx.context.userId
+                    "action_id": "change-leaderboard|" + ctx.context.userId
                 }
             }
         ]
@@ -572,7 +630,7 @@ app.action(/change-leaderboard\|.+/, async (ctx) => {
                             "value": "mania"
                         }
                     ],
-                    "action_id": "change-leaderboard|"+userId
+                    "action_id": "change-leaderboard|" + userId
                 }
             }
         ]
