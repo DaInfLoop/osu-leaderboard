@@ -4,6 +4,7 @@ const { App, ExpressReceiver } = (await import("@slack/bolt"));
 import postgres from "postgres";
 import "dotenv/config";
 import bcrypt from "bcrypt";
+import type { StaticSelectAction } from "@slack/bolt";
 
 const sql = postgres({
     host: '/var/run/postgresql',
@@ -226,13 +227,17 @@ async function getLeaderboard(sortBy?: "osu" | "taiko" | "fruits" | "mania", asc
             id: user.id,
             slackId: osuUsers.find(v => v[0] == user.id)![1],
             score: {
-                osu: user.statistics_rulesets.osu.total_score,
-                taiko: user.statistics_rulesets.taiko.total_score,
-                fruits: user.statistics_rulesets.fruits.total_score,
-                mania: user.statistics_rulesets.mania.total_score,
+                osu: user.statistics_rulesets.osu?.total_score || 0,
+                taiko: user.statistics_rulesets.taiko?.total_score || 0,
+                fruits: user.statistics_rulesets.fruits?.total_score || 0,
+                mania: user.statistics_rulesets.mania?.total_score || 0,
             }
         })))
     }
+
+    cache.length = 0;
+
+    cache.push(...lb);
 
     if (sortBy) {
         lb = lb.sort((a, b) => {
@@ -240,10 +245,6 @@ async function getLeaderboard(sortBy?: "osu" | "taiko" | "fruits" | "mania", asc
             else return a.score[sortBy] - b.score[sortBy]
         })
     }
-
-    cache.length = 0;
-
-    cache.push(...lb);
 
     return lb
 }
@@ -337,7 +338,242 @@ app.command('/osu-profile', async (ctx) => {
                 ...await generateProfile(slackProfile)
             ]
         })
+    } else {
+        // User's own profile
+        const mentionedUser = ctx.context.userId!;
+        const slackProfile = (await ctx.client.users.info({ user: mentionedUser })).user!;
+
+        if (!cache.find(u => u.slackId == slackProfile.id)) {
+            return ctx.respond({
+                text: `You don't seem to have an osu! account linked. You might have to wait a bit for my cache to reload though.`
+            })
+        }
+
+        return ctx.respond({
+            response_type: 'in_channel',
+            text: `${userProfile.display_name_normalized} ran /osu-profile`,
+            blocks: [
+                {
+                    "type": "context",
+                    "elements": [
+                        {
+                            "type": "mrkdwn",
+                            "text": `<@${ctx.context.userId}> ran \`/osu-profile\` | Matched by no input`
+                        }
+                    ]
+                },
+                ...await generateProfile(slackProfile)
+            ]
+        })
     }
+})
+
+app.command('/osu-leaderboard', async (ctx) => {
+    await ctx.ack();
+
+    const cached = splitArray<any>(cache, 10)[0].sort((a, b) => {
+        return b.score.osu - a.score.osu
+    });
+
+    const users = [];
+
+    for (let i in cached) {
+        const cachedU = cached[i];
+        const slackProfile = (await ctx.client.users.info({ user: cachedU.slackId })).user!;
+
+        users.push(`${parseInt(i) + 1}. <https://hackclub.slack.com/team/${slackProfile.id}|${slackProfile.profile!.display_name_normalized}> / <https://osu.ppy.sh/users/${cachedU.id}|${cachedU.username}> - ${cachedU.score.osu.toLocaleString()}`)
+    }
+
+    ctx.respond({
+        response_type: 'in_channel',
+        blocks: [
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": `<@${ctx.context.userId}> ran \`/osu-leaderboard\``
+                    }
+                ]
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": users.join('\n')
+                }
+            },
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": "*Current leaderboard:* :osu-standard: osu!standard"
+                    }
+                ]
+            },
+            {
+                "type": "section",
+                "block_id": "select",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "Change leaderboard:"
+                },
+                "accessory": {
+                    "type": "static_select",
+                    "placeholder": {
+                        "type": "plain_text",
+                        "text": "Choose ruleset...",
+                        "emoji": true
+                    },
+                    "options": [
+                        {
+                            "text": {
+                                "type": "plain_text",
+                                "text": ":osu-standard: osu!standard",
+                                "emoji": true
+                            },
+                            "value": "osu"
+                        },
+                        {
+                            "text": {
+                                "type": "plain_text",
+                                "text": ":osu-taiko: osu!taiko",
+                                "emoji": true
+                            },
+                            "value": "taiko"
+                        },
+                        {
+                            "text": {
+                                "type": "plain_text",
+                                "text": ":osu-catch: osu!catch",
+                                "emoji": true
+                            },
+                            "value": "fruits"
+                        },
+                        {
+                            "text": {
+                                "type": "plain_text",
+                                "text": ":osu-mania: osu!mania",
+                                "emoji": true
+                            },
+                            "value": "mania"
+                        }
+                    ],
+                    "action_id": "change-leaderboard|"+ctx.context.userId
+                }
+            }
+        ]
+    })
+})
+
+app.action("link", ({ ack }) => ack())
+
+app.action(/change-leaderboard\|.+/, async (ctx) => {
+    await ctx.ack();
+    const action = ctx.action as StaticSelectAction
+
+    const [_, userId] = action.action_id.split('|');
+
+    if (userId != ctx.context.userId) {
+        return ctx.respond({ replace_original: false, response_type: "ephemeral", text: `This leaderboard was initialised by <@${userId}>. Only they can manage it.` })
+    }
+
+    const selected = action.selected_option.value;
+
+    const cached = splitArray<any>(cache, 10)[0].sort((a, b) => {
+        return b.score[selected] - a.score[selected]
+    });
+
+    const users = [];
+
+    for (let i in cached) {
+        const cachedU = cached[i];
+        const slackProfile = (await ctx.client.users.info({ user: cachedU.slackId })).user!;
+
+        users.push(`${parseInt(i) + 1}. <https://hackclub.slack.com/team/${slackProfile.id}|${slackProfile.profile!.display_name_normalized}> / <https://osu.ppy.sh/users/${cachedU.id}|${cachedU.username}> - ${cachedU.score[selected].toLocaleString()}`)
+    }
+
+    ctx.respond({
+        response_type: 'in_channel',
+        blocks: [
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": `<@${ctx.context.userId}> ran \`/osu-leaderboard\``
+                    }
+                ]
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": users.join('\n')
+                }
+            },
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": `*Current leaderboard:* ${action.selected_option.text.text}`
+                    }
+                ]
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "Change leaderboard:"
+                },
+                "accessory": {
+                    "type": "static_select",
+                    "placeholder": {
+                        "type": "plain_text",
+                        "text": "Choose ruleset...",
+                        "emoji": true
+                    },
+                    "options": [
+                        {
+                            "text": {
+                                "type": "plain_text",
+                                "text": ":osu-standard: osu!standard",
+                                "emoji": true
+                            },
+                            "value": "osu"
+                        },
+                        {
+                            "text": {
+                                "type": "plain_text",
+                                "text": ":osu-taiko: osu!taiko",
+                                "emoji": true
+                            },
+                            "value": "taiko"
+                        },
+                        {
+                            "text": {
+                                "type": "plain_text",
+                                "text": ":osu-catch: osu!catch",
+                                "emoji": true
+                            },
+                            "value": "fruits"
+                        },
+                        {
+                            "text": {
+                                "type": "plain_text",
+                                "text": ":osu-mania: osu!mania",
+                                "emoji": true
+                            },
+                            "value": "mania"
+                        }
+                    ],
+                    "action_id": "change-leaderboard|"+userId
+                }
+            }
+        ]
+    })
 })
 
     ; (async () => {
@@ -345,7 +581,7 @@ app.command('/osu-profile', async (ctx) => {
 
         console.log('⚡️ Bolt app is running!');
 
-        await getLeaderboard("mania");
+        getLeaderboard();
 
-        console.log(cache)
+        setTimeout(getLeaderboard, 5 * 60 * 1000)
     })();
