@@ -638,6 +638,42 @@ app.action(/change-leaderboard\|.+/, async (ctx) => {
     })
 })
 
+receiver.router.get('/osu/news.rss', async (req, res) => {
+    const news = await fetch('https://osu.ppy.sh/api/v2/news').then(res => res.json());
+
+    const posts = news.news_posts;
+
+    const out = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+    <channel>
+        <title>osu!news</title>
+        <link>https://osu.haroon.hackclub.app/home/news</link>
+        <atom:link rel="self" type="application/rss+xml" href="https://osu.haroon.hackclub.app/osu/news.rss" />
+        <description>Latest news on osu!</description>
+        <language>en-us</language>
+        <ttl>60</ttl>
+        <image>
+            <url>https://raw.githubusercontent.com/ppy/osu-web/master/public/images/favicon/favicon-32x32.png</url>
+            <title>osu!news</title>
+            <link>https://osu.haroon.hackclub.app/home/news</link>
+        </image>
+
+        ${posts.map((post: any) => 
+`<item>
+            <title>${post.title}</title>
+            <link>https://osu.haroon.hackclub.app/home/news/${post.slug}</link>
+            <guid isPermaLink="false">${post.id}</guid>
+            <pubDate>${new Date(post.published_at).toLocaleString('en-GB', {timeZone: 'UTC',hour12: false,weekday: 'short',year: 'numeric',month: 'short',day: '2-digit',hour: '2-digit',minute: '2-digit',second: '2-digit',}).replace(/(?:(\d),)/, '$1') + ' GMT'}</pubDate>
+            <description>${post.preview}</description>
+        </item>`
+        ).join('\n        ')}
+    </channel>
+</rss>`;
+
+    res.contentType("application/rss+xml")
+    res.send(out)
+})
+
 receiver.router.get('*', (req, res) => {
     res.redirect(`https://osu.ppy.sh${req.path}`)
 })
