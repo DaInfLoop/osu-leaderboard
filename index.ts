@@ -1,3 +1,5 @@
+import type { User } from "@slack/web-api/dist/response/UsersInfoResponse";
+
 const { App, ExpressReceiver } = (await import("@slack/bolt"));
 import postgres from "postgres";
 import "dotenv/config";
@@ -125,7 +127,11 @@ receiver.router.get("/osu/callback", async (req, res) => {
     }
 })
 
-async function getTemporaryToken() {
+let _token: string | null;
+
+async function getTemporaryToken(): Promise<string> {
+    if (_token) return _token;
+
     const data = await fetch("https://osu.ppy.sh/oauth/token", {
         method: "POST",
         headers: {
@@ -133,6 +139,12 @@ async function getTemporaryToken() {
         },
         body: `client_id=33126&client_secret=${encodeURIComponent(process.env.CLIENT_SECRET!)}&grant_type=client_credentials&scope=public`
     }).then(res => res.json());
+
+    _token = data.access_token;
+
+    setTimeout(() => {
+        _token = null;
+    }, data.expires_in)
 
     return data.access_token;
 }
@@ -147,28 +159,61 @@ function splitArray<T>(arr: T[], maxElements: number): T[][] {
 }
 /// GENERATED ///
 
-const cache: { 
-    username: string, 
-    id: number, 
+const cache: {
+    username: string,
+    id: number,
+    slackId: string,
     score: {
         osu: number,
         taiko: number
         fruits: number,
         mania: number
-    } 
+    }
 }[] = []
 
-async function getLeaderboard() {
+async function getLeaderboard(): Promise<{
+    username: string,
+    id: number,
+    slackId: string,
+    score: {
+        osu: number,
+        taiko: number
+        fruits: number,
+        mania: number
+    }
+}[]>
+async function getLeaderboard(sortBy: "osu" | "taiko" | "fruits" | "mania", asc?: boolean): Promise<{
+    username: string,
+    id: number,
+    slackId: string,
+    score: {
+        osu: number,
+        taiko: number
+        fruits: number,
+        mania: number
+    }
+}[]>
+async function getLeaderboard(sortBy?: "osu" | "taiko" | "fruits" | "mania", asc: boolean = true) {
     const token = await getTemporaryToken();
 
     const users = await sql`SELECT * FROM links`;
 
-    let lb = [];
+    let lb: {
+        username: string,
+        id: number,
+        slackId: string,
+        score: {
+            osu: number,
+            taiko: number
+            fruits: number,
+            mania: number
+        }
+    }[] = [];
 
-    const osuUsers = users.map(user => user.osu_id);
+    const osuUsers: string[][] = users.map(user => [user.osu_id, user.slack_id]);
 
-    for (let list of splitArray<string>(osuUsers, 50)) {
-        const query = list.map((user) => `ids[]=${user}`).join("&");
+    for (let list of splitArray<string[]>(osuUsers, 50)) {
+        const query = list.map((user) => `ids[]=${user[0]}`).join("&");
 
         const data = await fetch(`https://osu.ppy.sh/api/v2/users?${query}`, {
             headers: {
@@ -179,14 +224,21 @@ async function getLeaderboard() {
         lb.push(...data.users.map(user => ({
             username: user.username,
             id: user.id,
+            slackId: osuUsers.find(v => v[0] == user.id)![1],
             score: {
                 osu: user.statistics_rulesets.osu.total_score,
                 taiko: user.statistics_rulesets.taiko.total_score,
                 fruits: user.statistics_rulesets.fruits.total_score,
                 mania: user.statistics_rulesets.mania.total_score,
-
             }
         })))
+    }
+
+    if (sortBy) {
+        lb = lb.sort((a, b) => {
+            if (asc) return b.score[sortBy] - a.score[sortBy]
+            else return a.score[sortBy] - b.score[sortBy]
+        })
     }
 
     cache.length = 0;
@@ -196,8 +248,104 @@ async function getLeaderboard() {
     return lb
 }
 
-; (async () => {
-    await app.start(41691);
+async function generateProfile(slackProfile: User) {
+    const token = await getTemporaryToken();
 
-    console.log('⚡️ Bolt app is running!');
-})();
+    const osuProfile = await fetch(`https://osu.ppy.sh/api/v2/users/${cache.find(user => user.slackId == slackProfile.id)!.id}?key=id`, {
+        headers: {
+            'Authorization': `Bearer ${token}`
+        }
+    }).then(res => res.json());
+
+    return [
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": `*Slack Username*: <https://hackclub.slack.com/team/${slackProfile.id}|${slackProfile.profile!.display_name_normalized}>\n*osu! username:* <https://osu.ppy.sh/users/${osuProfile.id}|${osuProfile.username}>`
+            },
+            "accessory": {
+                "type": "image",
+                "image_url": osuProfile.avatar_url,
+                "alt_text": `${osuProfile.username}'s osu profile picture`
+            }
+        }
+    ]
+}
+
+app.command('/osu-profile', async (ctx) => {
+    await ctx.ack();
+
+    const userProfile = (await ctx.client.users.info({ user: ctx.context.userId! })).user!.profile!;
+
+    const arg = ctx.command.text.slice();
+
+    let match;
+
+    if (match = arg.match(/\<\@(.+)\|(.+)>/)) {
+        // Slack user
+        const mentionedUser = match[1];
+        const slackProfile = (await ctx.client.users.info({ user: mentionedUser })).user!;
+
+        if (!cache.find(u => u.slackId == slackProfile.id)) {
+            return ctx.respond({
+                text: `${slackProfile.profile!.display_name_normalized} doesn't seem to have an osu! account linked. You might have to wait a bit for my cache to reload though.`
+            })
+        }
+
+        return ctx.respond({
+            response_type: 'in_channel',
+            text: `${userProfile.display_name_normalized} ran /osu-profile @${slackProfile.profile!.display_name_normalized}`,
+            blocks: [
+                {
+                    "type": "context",
+                    "elements": [
+                        {
+                            "type": "mrkdwn",
+                            "text": `<@${ctx.context.userId}> ran \`/osu-profile\` | Matched by slack user`
+                        }
+                    ]
+                },
+                ...await generateProfile(slackProfile)
+            ]
+        })
+    } else if (arg) {
+        // osu! user
+        const cached = cache.find(u => u.username.toLowerCase() == arg.toLowerCase())
+
+        if (!cached) {
+            return ctx.respond({
+                text: `${arg} doesn't seem to have an slack account linked. You might have to wait a bit for my cache to reload though.`
+            })
+        }
+
+        const slackProfile = (await ctx.client.users.info({ user: cached.slackId })).user!;
+
+        return ctx.respond({
+            response_type: 'in_channel',
+            text: `${userProfile.display_name_normalized} ran /osu-profile ${arg}`,
+            blocks: [
+                {
+                    "type": "context",
+                    "elements": [
+                        {
+                            "type": "mrkdwn",
+                            "text": `<@${ctx.context.userId}> ran \`/osu-profile\` | Matched by osu! username`
+                        }
+                    ]
+                },
+                ...await generateProfile(slackProfile)
+            ]
+        })
+    }
+})
+
+    ; (async () => {
+        await app.start(41691);
+
+        console.log('⚡️ Bolt app is running!');
+
+        await getLeaderboard("mania");
+
+        console.log(cache)
+    })();
