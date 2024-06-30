@@ -124,6 +124,8 @@ receiver.router.get("/osu/callback", async (req, res) => {
 
         await sql`INSERT INTO links VALUES (${user.id}, ${userId})`
 
+        getLeaderboard();
+
         return res.send(`Your osu! account (${user.id}) has been successfully linked to your Slack account (${userId})!`)
     }
 })
