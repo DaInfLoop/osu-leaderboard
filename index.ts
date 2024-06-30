@@ -25,7 +25,7 @@ const states = new Map();
 app.command("/osu-link", async (ctx) => {
     await ctx.ack();
 
-    const [ exists = null ] = await sql`SELECT osu_id FROM links WHERE slack_id = ${ctx.context.userId}`;
+    const [exists = null] = await sql`SELECT osu_id FROM links WHERE slack_id = ${ctx.context.userId}`;
 
     if (exists) {
         return ctx.respond({
@@ -39,7 +39,7 @@ app.command("/osu-link", async (ctx) => {
                         text: `This slack account is already linked to an <https://osu.ppy.sh/users/${exists.osu_id}/|osu! account>.`
                     }
                 }
-            ]            
+            ]
 
         })
 
@@ -119,13 +119,84 @@ receiver.router.get("/osu/callback", async (req, res) => {
         // {user.id} - osu! user ID
         // userId - slack user ID
 
-        sql`INSERT INTO links VALUES (${user.id}, ${userId})`
+        await sql`INSERT INTO links VALUES (${user.id}, ${userId})`
 
         return res.send(`Your osu! account (${user.id}) has been successfully linked to your Slack account (${userId})!`)
     }
 })
 
-;(async () => {
+async function getTemporaryToken() {
+    const data = await fetch("https://osu.ppy.sh/oauth/token", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/x-www-form-urlencoded"
+        },
+        body: `client_id=33126&client_secret=${encodeURIComponent(process.env.CLIENT_SECRET!)}&grant_type=client_credentials&scope=public`
+    }).then(res => res.json());
+
+    return data.access_token;
+}
+
+/// GENERATED ///
+function splitArray<T>(arr: T[], maxElements: number): T[][] {
+    const result: T[][] = [];
+    for (let i = 0; i < arr.length; i += maxElements) {
+        result.push(arr.slice(i, i + maxElements));
+    }
+    return result;
+}
+/// GENERATED ///
+
+const cache: { 
+    username: string, 
+    id: number, 
+    score: {
+        osu: number,
+        taiko: number
+        fruits: number,
+        mania: number
+    } 
+}[] = []
+
+async function getLeaderboard() {
+    const token = await getTemporaryToken();
+
+    const users = await sql`SELECT * FROM links`;
+
+    let lb = [];
+
+    const osuUsers = users.map(user => user.osu_id);
+
+    for (let list of splitArray<string>(osuUsers, 50)) {
+        const query = list.map((user) => `ids[]=${user}`).join("&");
+
+        const data = await fetch(`https://osu.ppy.sh/api/v2/users?${query}`, {
+            headers: {
+                'Authorization': `Bearer ${token}`
+            }
+        }).then(res => res.json());
+
+        lb.push(...data.users.map(user => ({
+            username: user.username,
+            id: user.id,
+            score: {
+                osu: user.statistics_rulesets.osu.total_score,
+                taiko: user.statistics_rulesets.taiko.total_score,
+                fruits: user.statistics_rulesets.fruits.total_score,
+                mania: user.statistics_rulesets.mania.total_score,
+
+            }
+        })))
+    }
+
+    cache.length = 0;
+
+    cache.push(...lb);
+
+    return lb
+}
+
+; (async () => {
     await app.start(41691);
 
     console.log('⚡️ Bolt app is running!');

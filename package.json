@@ -1,5 +1,5 @@
 {
-  "name": "osu!leaderboard",
+  "name": "osu-leaderboard",
   "module": "index.ts",
   "type": "module",
   "devDependencies": {
