@@ -23,6 +23,7 @@ const app = new App({
     }
 });
 
+
 const states = new Map();
 
 app.command("/osu-link", async (ctx) => {
@@ -635,6 +636,10 @@ app.action(/change-leaderboard\|.+/, async (ctx) => {
             }
         ]
     })
+})
+
+receiver.router.get('*', (req, res) => {
+    res.redirect(`https://osu.ppy.sh${req.path}`)
 })
 
     ; (async () => {
