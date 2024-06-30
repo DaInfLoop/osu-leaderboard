@@ -28,7 +28,7 @@ const states = new Map();
 app.command("/osu-link", async (ctx) => {
     await ctx.ack();
 
-    const [exists = null] = await sql`SELECT osu_id FROM links WHERE slack_id = ${ctx.context.userId}`;
+    const [exists = null] = await sql`SELECT osu_id FROM links WHERE slack_id = ${ctx.context.userId!}`;
 
     if (exists) {
         return ctx.respond({
@@ -224,6 +224,7 @@ async function getLeaderboard(sortBy?: "osu" | "taiko" | "fruits" | "mania", asc
             }
         }).then(res => res.json());
 
+        // @ts-ignore i can't be bothered to type this rn
         lb.push(...data.users.map(user => ({
             username: user.username,
             id: user.id,
