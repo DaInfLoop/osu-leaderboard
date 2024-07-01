@@ -85,22 +85,31 @@ app.command("/osu-link", async (ctx) => {
 receiver.router.get("/osu/callback", async (req, res) => {
     res.contentType("text/html")
 
+    if (req.query.error) {
+        return res.send(`Something went wrong: <br><br>${req.query.error_description} (${req.query.error})<br><br>This has been reported.`)
+    }
+
     const code = req.query.code as string;
     const state = req.query.state as string;
 
-    const [userId, hash] = state.split(':');
-
+    let _userId
+    
     try {
+        const [userId, hash] = state.split(':');
+
         const isValid = await bcrypt.compare(states.get(userId), hash);
 
         if (!isValid) {
             throw new Error();
         }
+
+        _userId = userId
+
+        states.delete(userId);
     } catch (err) {
         return res.send(`Something went wrong: <br><br>Your state was invalid. Please re-authenticate. (invalid_state)<br><br>This has been reported.`)
     }
 
-    states.delete(userId);
 
     const data = await fetch("https://osu.ppy.sh/oauth/token", {
         method: "POST",
@@ -123,11 +132,11 @@ receiver.router.get("/osu/callback", async (req, res) => {
         // {user.id} - osu! user ID
         // userId - slack user ID
 
-        await sql`INSERT INTO links VALUES (${user.id}, ${userId})`
+        await sql`INSERT INTO links VALUES (${user.id}, ${_userId})`
 
         getLeaderboard();
 
-        return res.send(`Your osu! account (${user.id}) has been successfully linked to your Slack account (${userId})!`)
+        return res.send(`Your osu! account (${user.id}) has been successfully linked to your Slack account (${_userId})!`)
     }
 })
 
@@ -665,6 +674,7 @@ receiver.router.get('/osu/news.rss', async (req, res) => {
             <guid isPermaLink="false">${post.id}</guid>
             <pubDate>${new Date(post.published_at).toLocaleString('en-GB', {timeZone: 'UTC',hour12: false,weekday: 'short',year: 'numeric',month: 'short',day: '2-digit',hour: '2-digit',minute: '2-digit',second: '2-digit',}).replace(/(?:(\d),)/, '$1') + ' GMT'}</pubDate>
             <description>${post.preview}</description>
+            <enclosure url="${post.first_image}" length="0" type="image/jpg"/>
         </item>`
         ).join('\n        ')}
     </channel>
