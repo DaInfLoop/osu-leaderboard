@@ -23,6 +23,122 @@ const app = new App({
     }
 });
 
+/// GENERATED ///
+type Room = {
+    id: number;
+    name: string;
+    category: string;
+    type: string;
+    user_id: number;
+    starts_at: string;
+    ends_at: string | null;
+    max_attempts: number | null;
+    participant_count: number;
+    channel_id: number;
+    active: boolean;
+    has_password: boolean;
+    queue_mode: string;
+    auto_skip: boolean;
+    current_playlist_item: {
+        id: number;
+        room_id: number;
+        beatmap_id: number;
+        ruleset_id: number;
+        allowed_mods: any[];
+        required_mods: {
+            acronym: string;
+            settings: Record<string, unknown>;
+        }[];
+        expired: boolean;
+        owner_id: number;
+        playlist_order: number | null;
+        played_at: string | null;
+        beatmap: {
+            beatmapset_id: number;
+            difficulty_rating: number;
+            id: number;
+            mode: string;
+            status: string;
+            total_length: number;
+            user_id: number;
+            version: string;
+            beatmapset: {
+                artist: string;
+                artist_unicode: string;
+                covers: {
+                    cover: string;
+                    cover2x: string;
+                    card: string;
+                    card2x: string;
+                    list: string;
+                    list2x: string;
+                    slimcover: string;
+                    slimcover2x: string;
+                };
+                creator: string;
+                favourite_count: number;
+                hype: number | null;
+                id: number;
+                nsfw: boolean;
+                offset: number;
+                play_count: number;
+                preview_url: string;
+                source: string;
+                spotlight: boolean;
+                status: string;
+                title: string;
+                title_unicode: string;
+                track_id: number | null;
+                user_id: number;
+                video: boolean;
+            };
+        };
+    };
+    difficulty_range: {
+        max: number;
+        min: number;
+    };
+    host: {
+        avatar_url: string;
+        country_code: string;
+        default_group: string;
+        id: number;
+        is_active: boolean;
+        is_bot: boolean;
+        is_deleted: boolean;
+        is_online: boolean;
+        is_supporter: boolean;
+        last_visit: string;
+        pm_friends_only: boolean;
+        profile_colour: string | null;
+        username: string;
+        country: {
+            code: string;
+            name: string;
+        };
+    };
+    playlist_item_stats: {
+        count_active: number;
+        count_total: number;
+        ruleset_ids: number[];
+    };
+    recent_participants: {
+        avatar_url: string;
+        country_code: string;
+        default_group: string;
+        id: number;
+        is_active: boolean;
+        is_bot: boolean;
+        is_deleted: boolean;
+        is_online: boolean;
+        is_supporter: boolean;
+        last_visit: string;
+        pm_friends_only: boolean;
+        profile_colour: string | null;
+        username: string;
+    }[];
+};
+/// GENERATED ///
 
 const states = new Map();
 
@@ -74,7 +190,7 @@ app.command("/osu-link", async (ctx) => {
                         "emoji": true
                     },
                     "value": "link",
-                    "url": `https://osu.ppy.sh/oauth/authorize?client_id=33126&redirect_uri=https://osu.haroon.hackclub.app/osu/callback&response_type=code&state=${encodeURIComponent(ctx.context.userId + ":" + encodedCode)}`,
+                    "url": `https://osu.ppy.sh/oauth/authorize?client_id=33126&redirect_uri=https://osu.haroon.hackclub.app/osu/callback&response_type=code&state=${encodeURIComponent(ctx.context.userId + ":" + encodedCode)}&scope=public`,
                     "action_id": "link"
                 }
             }
@@ -116,7 +232,7 @@ receiver.router.get("/osu/callback", async (req, res) => {
         headers: {
             "Content-Type": "application/x-www-form-urlencoded"
         },
-        body: `client_id=33126&client_secret=${encodeURIComponent(process.env.CLIENT_SECRET!)}&code=${code}&grant_type=authorization_code&redirect_uri=${encodeURIComponent("https://osu.haroon.hackclub.app/osu/callback")}`
+        body: `client_id=33126&client_secret=${encodeURIComponent(process.env.CLIENT_SECRET!)}&code=${code}&grant_type=authorization_code&scope=public&redirect_uri=${encodeURIComponent("https://osu.haroon.hackclub.app/osu/callback")}`
     }).then(res => res.json());
 
     if (data.error) {
@@ -132,9 +248,9 @@ receiver.router.get("/osu/callback", async (req, res) => {
         // {user.id} - osu! user ID
         // userId - slack user ID
 
-        await sql`INSERT INTO links VALUES (${user.id}, ${_userId})`
+        await sql`INSERT INTO links VALUES (${user.id}, ${_userId}, ${data.refresh_token})`
 
-        getLeaderboard();
+        cacheStuff();
 
         return res.send(`Your osu! account (${user.id}) has been successfully linked to your Slack account (${_userId})!`)
     }
@@ -162,6 +278,34 @@ async function getTemporaryToken(): Promise<string> {
     return data.access_token;
 }
 
+async function getAccessToken(slack_id: string): Promise<string> {
+    const user = await sql`SELECT * FROM links WHERE slack_id = ${slack_id}`;
+
+    const data = await fetch("https://osu.ppy.sh/oauth/token", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/x-www-form-urlencoded"
+        },
+        body: `client_id=33126&client_secret=${encodeURIComponent(process.env.CLIENT_SECRET!)}&grant_type=refresh_token&refresh_token=${user[0].refresh_token}&scope=public`
+    }).then(res => res.json());
+
+    sql`UPDATE links SET refresh_token = ${data.refresh_token} WHERE slack_id = ${slack_id}`;
+
+    return data.access_token;
+}
+
+async function sendGET<T>(path: string, token?: string): Promise<T> {
+    const _token = token || await getTemporaryToken();
+
+    const data = await fetch(`https://osu.ppy.sh/api/v2/${path}`, {
+        headers: {
+            'Authorization': `Bearer ${_token}`
+        }
+    }).then(res => res.json());
+
+    return data as T
+}
+
 /// GENERATED ///
 function splitArray<T>(arr: T[], maxElements: number): T[][] {
     const result: T[][] = [];
@@ -184,29 +328,9 @@ const cache: {
     }
 }[] = []
 
-async function getLeaderboard(): Promise<{
-    username: string,
-    id: number,
-    slackId: string,
-    score: {
-        osu: number,
-        taiko: number
-        fruits: number,
-        mania: number
-    }
-}[]>
-async function getLeaderboard(sortBy: "osu" | "taiko" | "fruits" | "mania", asc?: boolean): Promise<{
-    username: string,
-    id: number,
-    slackId: string,
-    score: {
-        osu: number,
-        taiko: number
-        fruits: number,
-        mania: number
-    }
-}[]>
-async function getLeaderboard(sortBy?: "osu" | "taiko" | "fruits" | "mania", asc: boolean = true) {
+const multiplayerRoundCache: Room[] = [];
+
+async function cacheStuff(): Promise<void> {
     const token = await getTemporaryToken();
 
     const users = await sql`SELECT * FROM links`;
@@ -228,11 +352,7 @@ async function getLeaderboard(sortBy?: "osu" | "taiko" | "fruits" | "mania", asc
     for (let list of splitArray<string[]>(osuUsers, 50)) {
         const query = list.map((user) => `ids[]=${user[0]}`).join("&");
 
-        const data = await fetch(`https://osu.ppy.sh/api/v2/users?${query}`, {
-            headers: {
-                'Authorization': `Bearer ${token}`
-            }
-        }).then(res => res.json());
+        const data = await sendGET(`users?${query}`)
 
         // @ts-ignore i can't be bothered to type this rn
         lb.push(...data.users.map(user => ({
@@ -252,14 +372,17 @@ async function getLeaderboard(sortBy?: "osu" | "taiko" | "fruits" | "mania", asc
 
     cache.push(...lb);
 
-    if (sortBy) {
-        lb = lb.sort((a, b) => {
-            if (asc) return b.score[sortBy] - a.score[sortBy]
-            else return a.score[sortBy] - b.score[sortBy]
-        })
-    }
+    // Multiplayer games
 
-    return lb
+    multiplayerRoundCache.length = 0;
+
+    const rooms = await fetch(`https://osu.ppy.sh/api/v2/rooms?category=realtime`, {
+        headers: {
+            'Authorization': `Bearer ${await getAccessToken("U06TBP41C3E")}`
+        }
+    }).then(res => res.json());
+
+    multiplayerRoundCache.push(...rooms);
 }
 
 async function generateProfile(slackProfile: User) {
@@ -416,7 +539,32 @@ app.command('/osu-profile', async (ctx) => {
 
         if (!cache.find(u => u.slackId == slackProfile.id)) {
             return ctx.respond({
-                text: `You don't seem to have an osu! account linked. You might have to wait a bit for my cache to reload though.`
+                response_type: 'in_channel',
+                text: `${userProfile.display_name_normalized} ran /osu-profile`,
+                blocks: [
+                    {
+                        "type": "context",
+                        "elements": [
+                            {
+                                "type": "mrkdwn",
+                                "text": `<@${ctx.context.userId}> ran \`/osu-profile\` | Matched by no input`
+                            }
+                        ]
+                    },
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": `*Slack Username*: <https://hackclub.slack.com/team/${slackProfile.id}|${slackProfile.profile!.display_name_normalized}>\n*osu! username:* Not linked`
+                        },
+                        "accessory": {
+                            "type": "image",
+                            "image_url": 'https://osu.ppy.sh/images/layout/avatar-guest@2x.png',
+                            "alt_text": `default osu profile picture`
+                        }
+                    }
+
+                ]
             })
         }
 
@@ -647,6 +795,45 @@ app.action(/change-leaderboard\|.+/, async (ctx) => {
     })
 })
 
+app.command("/osu-multiplayer-invite", async (ctx) => {
+    await ctx.ack();
+    const me = cache.find(user => user.slackId == ctx.context.userId);
+
+    if (!me) {
+        return ctx.respond({
+            response_type: 'ephemeral',
+            text: `Hey <@${ctx.context.userId}>, you haven't linked your osu! account to your Slack account. Run /osu-link and then run this command.`,
+            blocks: [
+                {
+                    type: 'section',
+                    text: {
+                        type: 'mrkdwn',
+                        text: `Hey <@${ctx.context.userId}>, you haven't linked your osu! account to your Slack account. Run \`/osu-link\` and then run this command.`
+                    }
+                }
+            ]
+        });
+    }
+
+    const ownedRoom = multiplayerRoundCache.find(room => room.host.id == me.id);
+
+    if (!me) {
+        return ctx.respond({
+            response_type: 'ephemeral',
+            text: `Hey <@${ctx.context.userId}>, you aren't in a multiplayer room. If you are, make sure you're the host of the room, and you're on osu!lazer.`,
+            blocks: [
+                {
+                    type: 'section',
+                    text: {
+                        type: 'mrkdwn',
+                        text: `Hey <@${ctx.context.userId}>, you aren't in a multiplayer room. If you are, make sure you're the host of the room, and you're on osu!lazer.`,
+                    }
+                }
+            ]
+        });
+    }    
+})
+
 receiver.router.get('/osu/news.rss', async (req, res) => {
     const news = await fetch('https://osu.ppy.sh/api/v2/news').then(res => res.json());
 
@@ -674,7 +861,7 @@ receiver.router.get('/osu/news.rss', async (req, res) => {
             <guid isPermaLink="false">${post.id}</guid>
             <pubDate>${new Date(post.published_at).toLocaleString('en-GB', {timeZone: 'UTC',hour12: false,weekday: 'short',year: 'numeric',month: 'short',day: '2-digit',hour: '2-digit',minute: '2-digit',second: '2-digit',}).replace(/(?:(\d),)/, '$1') + ' GMT'}</pubDate>
             <description>${post.preview}</description>
-            <enclosure url="${post.first_image}" length="0" type="image/jpg"/>
+            <enclosure url="${post.first_image}" type="image/jpg"/>
         </item>`
         ).join('\n        ')}
     </channel>
@@ -693,7 +880,7 @@ receiver.router.get('*', (req, res) => {
 
         console.log('⚡️ Bolt app is running!');
 
-        getLeaderboard();
+        cacheStuff();
 
-        setTimeout(getLeaderboard, 5 * 60 * 1000)
+        setTimeout(cacheStuff, 60 * 1000) // Cache every minute. Ratelimit is 1200 req/m anyways.
     })();
