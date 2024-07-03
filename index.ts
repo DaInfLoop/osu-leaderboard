@@ -809,6 +809,194 @@ receiver.router.get('/osu/news.rss', async (req, res) => {
 
     res.contentType("application/rss+xml")
     res.send(out)
+});
+
+app.command('/osu-eval', async (ctx) => {
+    await ctx.ack();
+
+    if (ctx.context.userId != 'U06TBP41C3E') return;
+
+    const resp = require('util').inspect(await eval(ctx.body.text), undefined, 1)
+
+    ctx.respond({
+        text: resp,
+        response_type: 'ephemeral',
+        blocks: [
+            {
+                type: 'section',
+                text: {
+                    type: 'mrkdwn',
+                    text: "```" + resp + "```"
+                }
+            }
+        ]
+    })
+})
+
+app.command('/osu-search', async (ctx) => {
+    await ctx.ack();
+
+    ctx.client.views.open({
+        trigger_id: ctx.payload.trigger_id,
+        view: {
+            "type": "modal",
+            "title": {
+                "type": "plain_text",
+                "text": "Search for a beatmap",
+                "emoji": true
+            },
+            "submit": {
+                "type": "plain_text",
+                "text": "Search",
+                "emoji": true
+            },
+            "close": {
+                "type": "plain_text",
+                "text": "Cancel",
+                "emoji": true
+            },
+            "blocks": [
+                {
+                    "type": "input",
+                    block_id: "keywords",
+                    "element": {
+                        "type": "plain_text_input",
+                        "action_id": "keywords"
+                    },
+                    "label": {
+                        "type": "plain_text",
+                        "text": "Keywords",
+                        "emoji": true
+                    },
+                    optional: true
+                },
+                {
+                    "type": "input",
+                    "block_id": "rating",
+                    "element": {
+                        "type": "number_input",
+                        "is_decimal_allowed": true,
+                        "action_id": "rating"
+                    },
+                    "label": {
+                        "type": "plain_text",
+                        "text": "Rating",
+                        "emoji": true
+                    },
+                    optional: true
+                },
+                {
+                    "type": "input",
+                    "block_id": "gamemode",
+                    "element": {
+                        "type": "static_select",
+                        "placeholder": {
+                            "type": "plain_text",
+                            "text": "Choose an item",
+                            "emoji": true
+                        },
+                        "options": [
+                            {
+                                "text": {
+                                    "type": "plain_text",
+                                    "text": "osu!standard",
+                                    "emoji": true
+                                },
+                                "value": "osu"
+                            },
+                            {
+                                "text": {
+                                    "type": "plain_text",
+                                    "text": "osu!taiko",
+                                    "emoji": true
+                                },
+                                "value": "taiko"
+                            },
+                            {
+                                "text": {
+                                    "type": "plain_text",
+                                    "text": "osu!catch",
+                                    "emoji": true
+                                },
+                                "value": "fruits"
+                            },
+                            {
+                                "text": {
+                                    "type": "plain_text",
+                                    "text": "osu!mania",
+                                    "emoji": true
+                                },
+                                "value": "mania"
+                            }                            
+                        ],
+                        "action_id": "gamemode"
+                    },
+                    "label": {
+                        "type": "plain_text",
+                        "text": "Gamemode",
+                        "emoji": true
+                    }
+                },
+                // @ts-expect-error initial_option does exist and work.
+                {
+                    "type": "actions",
+                    "block_id": "rating",
+                    "elements": [
+                        {
+                            "type": "radio_buttons",
+                            "initial_option": {
+                                "text": {
+                                    "type": "mrkdwn",
+                                    "text": "*Unranked*"
+                                },
+                                "description": {
+                                    "type": "mrkdwn",
+                                    "text": "Maps that will not give you Performance Points"
+                                },
+                                "value": "unranked"
+                            },
+                            "options": [
+                                {
+                                    "text": {
+                                        "type": "mrkdwn",
+                                        "text": "*Unranked*"
+                                    },
+                                    "description": {
+                                        "type": "mrkdwn",
+                                        "text": "Maps that will not give you Performance Points"
+                                    },
+                                    "value": "unranked"
+                                },
+                                {
+                                    "text": {
+                                        "type": "mrkdwn",
+                                        "text": "*Ranked*"
+                                    },
+                                    "description": {
+                                        "type": "mrkdwn",
+                                        "text": "Maps that will give you Performance Points"
+                                    },
+                                    "value": "ranked"
+                                },
+                                {
+                                    "text": {
+                                        "type": "mrkdwn",
+                                        "text": "*Loved*"
+                                    },
+                                    "description": {
+                                        "type": "mrkdwn",
+                                        "text": "Maps that will not give you Performance Points but suggested by the community"
+                                    },
+                                    "value": "loved"
+                                }
+                            ],
+                            "action_id": "rating"
+                        }
+                    ]
+                }
+            ]
+        }
+    })
 })
 
 receiver.router.get('*', (req, res) => {
