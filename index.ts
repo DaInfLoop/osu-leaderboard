@@ -836,10 +836,30 @@ app.command('/osu-eval', async (ctx) => {
 app.command('/osu-search', async (ctx) => {
     await ctx.ack();
 
+    const me = cache.find(user => user.slackId == ctx.context.userId);
+
+    if (!me) {
+        return ctx.respond({
+            response_type: 'ephemeral',
+            text: `Hey <@${ctx.context.userId}>, you haven't linked your osu! account to your Slack account. Run /osu-link and then run this command.`,
+            blocks: [
+                {
+                    type: 'section',
+                    text: {
+                        type: 'mrkdwn',
+                        text: `Hey <@${ctx.context.userId}>, you haven't linked your osu! account to your Slack account. Run \`/osu-link\` and then run this command.`
+                    }
+                }
+            ]
+        });
+    }
+
     ctx.client.views.open({
         trigger_id: ctx.payload.trigger_id,
         view: {
             "type": "modal",
+            "callback_id": "search",
+            private_metadata: ctx.payload.channel_id,
             "title": {
                 "type": "plain_text",
                 "text": "Search for a beatmap",
@@ -927,7 +947,7 @@ app.command('/osu-search', async (ctx) => {
                                     "emoji": true
                                 },
                                 "value": "mania"
-                            }                            
+                            }
                         ],
                         "action_id": "gamemode"
                     },
@@ -940,32 +960,32 @@ app.command('/osu-search', async (ctx) => {
                 // @ts-expect-error initial_option does exist and work.
                 {
                     "type": "actions",
-                    "block_id": "rating",
+                    "block_id": "ranked",
                     "elements": [
                         {
                             "type": "radio_buttons",
                             "initial_option": {
                                 "text": {
                                     "type": "mrkdwn",
-                                    "text": "*Unranked*"
+                                    "text": "*Ranked*"
                                 },
                                 "description": {
                                     "type": "mrkdwn",
-                                    "text": "Maps that will not give you Performance Points"
+                                    "text": "Maps that will give you Performance Points"
                                 },
-                                "value": "unranked"
+                                "value": "ranked"
                             },
                             "options": [
                                 {
                                     "text": {
                                         "type": "mrkdwn",
-                                        "text": "*Unranked*"
+                                        "text": "*Graveyard*"
                                     },
                                     "description": {
                                         "type": "mrkdwn",
-                                        "text": "Maps that will not give you Performance Points"
+                                        "text": "Maps that were previously ranked and gave you Performance Points"
                                     },
-                                    "value": "unranked"
+                                    "value": "graveyard"
                                 },
                                 {
                                     "text": {
@@ -990,12 +1010,74 @@ app.command('/osu-search', async (ctx) => {
                                     "value": "loved"
                                 }
                             ],
-                            "action_id": "rating"
+                            "action_id": "ranked"
                         }
                     ]
                 }
             ]
         }
+    })
+})
+
+app.view("search", async (ctx) => {
+    await ctx.ack();
+
+    const options = {
+        keywords: ctx.payload.state.values["keywords"]["keywords"]?.value || "",
+        rating: ctx.payload.state.values["rating"]["rating"]?.value || "",
+        gamemode: ctx.payload.state.values["gamemode"]["gamemode"].selected_option!.value,
+        ranked: ctx.payload.state.values["ranked"]["ranked"].selected_option!.value,
+    }
+
+    const url = new URL("https://osu.ppy.sh/api/v2/beatmapsets/search");
+
+    url.searchParams.set("e", "")
+    url.searchParams.set("c", "")
+    url.searchParams.set("g", "")
+    url.searchParams.set("l", "")
+    url.searchParams.set("m", ["osu", "taiko", "fruits", "mania"].indexOf(options.gamemode).toString())
+    url.searchParams.set("nsfw", "")
+    url.searchParams.set("played", "")
+    url.searchParams.set("q", options.keywords)
+    url.searchParams.set("r", "")
+    url.searchParams.set("sort", "")
+    url.searchParams.set("s", options.ranked);
+
+    const data = await fetch(url, {
+        method: 'GET',
+        headers: {
+            'Authorization': `Bearer ${await getAccessToken(ctx.context.userId!)}`
+        }
+    }).then(res => res.json());
+
+    const set = data.beatmapsets[0];
+
+    return ctx.client.chat.postMessage({
+        channel: ctx.view.private_metadata,
+        "blocks": [
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": `<@${ctx.context.userId}> searched for a map`
+                    }
+                ]
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": `*Beatmap:* ${set.title_unicode} - ${set.artist_unicode}\n*Mapper:* ${set.creator}\n\n<https://osu.ppy.sh/beatmapsets/${set.id}|*View this set on the osu! website*>`
+                }
+            },
+            {
+                "type": "image",
+                "image_url": set.covers.card,
+                "alt_text": "beatmap card"
+            }
+        ]
+
     })
 })
 
