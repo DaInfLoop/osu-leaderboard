@@ -33,7 +33,7 @@ SLACK_SIGNING_SECRET=<your slack signing secret>
 CLIENT_SECRET=<your osu! oauth app's client secret>
 ```
 
-3. Change the following hard-coded values (sorry!)
+3. Change the following hard-coded values (sorry!)  
 	a. lines 9-13: edit for your postgres installation
 
 	b. line 76, 118, 152, 172: edit for your client ID and redirect URI
