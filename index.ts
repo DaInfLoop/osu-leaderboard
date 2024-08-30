@@ -5,6 +5,7 @@ import postgres from "postgres";
 import "dotenv/config";
 import bcrypt from "bcrypt";
 import type { StaticSelectAction } from "@slack/bolt";
+import { inspect } from "node:util";
 
 const sql = postgres({
     host: '/var/run/postgresql',
@@ -161,8 +162,10 @@ async function getTemporaryToken(): Promise<string> {
     return data.access_token;
 }
 
-async function getAccessToken(slack_id: string): Promise<string> {
+async function getAccessToken(slack_id: string): Promise<string|null> {
     const user = await sql`SELECT * FROM links WHERE slack_id = ${slack_id}`;
+
+    if (!user.length) return null
 
     const data = await fetch("https://osu.ppy.sh/oauth/token", {
         method: "POST",
@@ -259,7 +262,9 @@ async function cacheStuff(): Promise<void> {
 
     multiplayerRoundCache.length = 0;
 
-    const tohken = await getAccessToken("U06TBP41C3E");
+    const tohken = await getAccessToken("U06TBP41C3E") as string;
+
+    if (!tohken) return;
 
     const rooms = await fetch(`https://osu.ppy.sh/api/v2/rooms?category=realtime`, {
         headers: {
@@ -816,7 +821,7 @@ app.command('/osu-eval', async (ctx) => {
 
     if (ctx.context.userId != 'U06TBP41C3E') return;
 
-    const resp = require('util').inspect(await eval(ctx.body.text), undefined, 1)
+    const resp = inspect(await eval(ctx.body.text), undefined, 1)
 
     ctx.respond({
         text: resp,
