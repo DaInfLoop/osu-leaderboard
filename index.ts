@@ -1097,5 +1097,5 @@ receiver.router.get('*', (req, res) => {
 
         cacheStuff();
 
-        setTimeout(cacheStuff, 60 * 1000) // Cache every minute. Ratelimit is 1200 req/m anyways.
+        setInterval(cacheStuff, 60 * 1000) // Cache every minute. Ratelimit is 1200 req/m anyways.
     })();
