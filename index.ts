@@ -6,6 +6,7 @@ import "dotenv/config";
 import bcrypt from "bcrypt";
 import type { StaticSelectAction } from "@slack/bolt";
 import { inspect } from "node:util";
+import { scheduleJob } from "node-schedule";
 
 const sql = postgres({
     host: '/var/run/postgresql',
@@ -162,22 +163,30 @@ async function getTemporaryToken(): Promise<string> {
     return data.access_token;
 }
 
-async function getAccessToken(slack_id: string): Promise<string|null> {
+async function getAccessToken(slack_id: string): Promise<string | null> {
     const user = await sql`SELECT * FROM links WHERE slack_id = ${slack_id}`;
 
     if (!user.length) return null
 
-    const data = await fetch("https://osu.ppy.sh/oauth/token", {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/x-www-form-urlencoded"
-        },
-        body: `client_id=33126&client_secret=${encodeURIComponent(process.env.CLIENT_SECRET!)}&grant_type=refresh_token&refresh_token=${user[0].refresh_token}&scope=public`
-    }).then(res => res.json());
 
-    await sql`UPDATE links SET refresh_token = ${data.refresh_token} WHERE slack_id = ${slack_id}`;
+    try {
+        const data = await fetch("https://osu.ppy.sh/oauth/token", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/x-www-form-urlencoded"
+            },
+            body: `client_id=33126&client_secret=${encodeURIComponent(process.env.CLIENT_SECRET!)}&grant_type=refresh_token&refresh_token=${user[0].refresh_token}&scope=public`
+        }).then(res => res.json());
 
-    return data.access_token;
+        console.log(data)
+
+        await sql`UPDATE links SET refresh_token = ${data.refresh_token} WHERE slack_id = ${slack_id}`;
+
+        return data.access_token;
+    } catch (err) {
+        console.error(err)
+        return null
+    }
 }
 
 async function sendGET<T>(path: string, token?: string): Promise<T> {
@@ -480,17 +489,22 @@ app.command('/osu-profile', async (ctx) => {
 app.command('/osu-leaderboard', async (ctx) => {
     await ctx.ack();
 
-    const cached = splitArray<any>(cache, 10)[0].sort((a, b) => {
+    const cached = splitArray<any>(cache.sort((a, b) => {
         return b.score.osu - a.score.osu
-    });
+    }), 10);
 
     const users = [];
 
     for (let i in cached) {
-        const cachedU = cached[i];
-        const slackProfile = (await ctx.client.users.info({ user: cachedU.slackId })).user!;
+        try {
+            const cachedU = cached[i];
+            const slackProfile = (await ctx.client.users.info({ user: cachedU.slackId })).user!;
 
-        users.push(`${parseInt(i) + 1}. <https://hackclub.slack.com/team/${slackProfile.id}|${slackProfile.profile!.display_name_normalized}> / <https://osu.ppy.sh/users/${cachedU.id}|${cachedU.username}> - ${cachedU.score.osu.toLocaleString()}`)
+            users.push(`${users.length + 1}. <https://hackclub.slack.com/team/${slackProfile.id}|${slackProfile.profile!.display_name_normalized}> / <https://osu.ppy.sh/users/${cachedU.id}|${cachedU.username}> - ${cachedU.score.osu.toLocaleString()}`)
+        } catch (e) {
+            console.error(e)
+            continue;
+        }
     }
 
     ctx.respond({
@@ -590,17 +604,22 @@ app.action(/change-leaderboard\|.+/, async (ctx) => {
 
     const selected = action.selected_option.value;
 
-    const cached = splitArray<any>(cache, 10)[0].sort((a, b) => {
+    const cached = splitArray<any>(cache.sort((a, b) => {
         return b.score[selected] - a.score[selected]
-    });
+    }), 10)[0];
 
     const users = [];
 
     for (let i in cached) {
-        const cachedU = cached[i];
-        const slackProfile = (await ctx.client.users.info({ user: cachedU.slackId })).user!;
+        try {
+            const cachedU = cached[i];
+            const slackProfile = (await ctx.client.users.info({ user: cachedU.slackId })).user!;
 
-        users.push(`${parseInt(i) + 1}. <https://hackclub.slack.com/team/${slackProfile.id}|${slackProfile.profile!.display_name_normalized}> / <https://osu.ppy.sh/users/${cachedU.id}|${cachedU.username}> - ${cachedU.score[selected].toLocaleString()}`)
+            users.push(`${users.length + 1}. <https://hackclub.slack.com/team/${slackProfile.id}|${slackProfile.profile!.display_name_normalized}> / <https://osu.ppy.sh/users/${cachedU.id}|${cachedU.username}> - ${cachedU.score[selected].toLocaleString()}`)
+        } catch (e) {
+            console.error(e)
+            continue;
+        }
     }
 
     ctx.respond({
@@ -1090,12 +1109,99 @@ receiver.router.get('*', (req, res) => {
     res.redirect(`https://osu.ppy.sh${req.path}`)
 })
 
-    ; (async () => {
-        await app.start(41691);
+enum Mods {
+    EZ = "Easy",
+    NF = "No Fail",
+    HT = "Half Time",
+    HR = "Hard Rock",
+    SD = "Sudden Death",
+    PF = "Perfect",
+    DT = "Double Time",
+    NC = "Nightcore",
+    HD = "Hidden",
+    FI = "Fade In",
+    FL = "Flashlight",
+    RL = "Relax",
+    AP = "Autopilot",
+    SO = "Spun Out",
+    "1K" = "One Key",
+    "2K" = "Two Keys",
+    "3K" = "Three Keys",
+    "4K" = "Four Keys",
+    "5K" = "Five Keys",
+    "6K" = "Six Keys",
+    "7K" = "Seven Keys",
+    "8K" = "Eight Keys",
+    "9K" = "Nine Keys",
+    "10K" = "Ten Keys"
+}
 
-        console.log('⚡️ Bolt app is running!');
+async function debugDailyChallenge() {
+    // Daily Challenge!!
 
-        cacheStuff();
+    const tohken = await getAccessToken("U06TBP41C3E");
 
-        setInterval(cacheStuff, 60 * 1000) // Cache every minute. Ratelimit is 1200 req/m anyways.
-    })();
+    const rooms: any[] = await fetch(`https://osu.ppy.sh/api/v2/rooms`, {
+        headers: {
+            'Authorization': `Bearer ${tohken}`,
+            'X-Api-Version': '20240529'
+        }
+    }).then(res => res.json());
+
+    const dailyChallenge = rooms.find(room => room.host.id == 3 && room.active && room.category == "daily_challenge");
+
+    const currentSong = dailyChallenge.current_playlist_item
+
+    const ruleset = [":osu-standard: osu!standard", ":osu-taiko: osu!taiko", ":osu-catch: osu!catch", ":osu-mania: osu!mania"][currentSong.ruleset_id]
+
+    return app.client.chat.postMessage({
+        channel: "C165V7XT9",
+        text: "A new daily challenge has started!",
+        "blocks": [
+            {
+                "type": "header",
+                text: {
+                    text: ruleset.split(' ').shift() + " A new daily challenge has started!",
+                    emoji: true,
+                    type: "plain_text"
+                }
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": `<https://osu.ppy.sh/beatmapsets/${currentSong.beatmap.beatmapset_id
+                        }#osu/${currentSong.beatmap.id
+                        }|${currentSong.beatmap.beatmapset.title
+                        } - ${currentSong.beatmap.beatmapset.artist
+                        } (${currentSong.beatmap.difficulty_rating
+                        })>
+                    
+*Ruleset:* ${ruleset}
+*Required mods:* ${currentSong.required_mods.length === 0 ? "None" : currentSong.required_mods.map((mod: any) =>
+                            // @ts-ignore I HATE THIS
+                            Mods[mod.acronym] || mod.acronym
+                        ).join(', ')}`
+                },
+                "accessory": {
+                    "type": "image",
+                    "image_url": dailyChallenge.host.avatar_url,
+                    "alt_text": `${dailyChallenge.host.username}'s osu profile picture`
+                }
+            }
+        ],
+        unfurl_links: true
+    })
+}
+
+; (async () => {
+    await app.start(41691);
+
+    console.log('⚡️ Bolt app is running!');
+
+    cacheStuff();
+
+    setInterval(cacheStuff, 60 * 1000) // Cache every minute. Ratelimit is 1200 req/m anyways.
+
+    scheduleJob('30 5 0 * * *', debugDailyChallenge)
+})();

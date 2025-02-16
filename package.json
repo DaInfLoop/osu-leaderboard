@@ -11,8 +11,10 @@
   "dependencies": {
     "@slack/bolt": "^3.19.0",
     "@types/bcrypt": "^5.0.2",
+    "@types/node-schedule": "^2.1.7",
     "bcrypt": "^5.1.1",
     "dotenv": "^16.4.5",
+    "node-schedule": "^2.1.1",
     "postgres": "^3.4.4"
   }
 }
