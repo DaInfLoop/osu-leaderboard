@@ -8,6 +8,13 @@ import type { StaticSelectAction } from "@slack/bolt";
 import { inspect } from "node:util";
 import { scheduleJob } from "node-schedule";
 
+// @ts-expect-error No typings :)))))))))))
+import osr from "node-osr";
+import { Client, Events } from "ordr.js";
+
+import io from "socket.io-client";
+import fs from "fs";
+
 const sql = postgres({
     host: '/var/run/postgresql',
     database: 'haroon_osu',
@@ -24,6 +31,8 @@ const app = new App({
         port: 41691
     }
 });
+
+const ordr = new Client(process.env.ORDR_TOKEN!);
 
 const states = new Map();
 
@@ -168,7 +177,6 @@ async function getAccessToken(slack_id: string): Promise<string | null> {
 
     if (!user.length) return null
 
-
     try {
         const data = await fetch("https://osu.ppy.sh/oauth/token", {
             method: "POST",
@@ -177,8 +185,6 @@ async function getAccessToken(slack_id: string): Promise<string | null> {
             },
             body: `client_id=33126&client_secret=${encodeURIComponent(process.env.CLIENT_SECRET!)}&grant_type=refresh_token&refresh_token=${user[0].refresh_token}&scope=public`
         }).then(res => res.json());
-
-        console.log(data)
 
         await sql`UPDATE links SET refresh_token = ${data.refresh_token} WHERE slack_id = ${slack_id}`;
 
@@ -211,19 +217,25 @@ function splitArray<T>(arr: T[], maxElements: number): T[][] {
 }
 /// GENERATED ///
 
-const cache: {
-    username: string,
-    id: number,
-    slackId: string,
+type CacheUser = {
+    username: string;
+    id: number;
+    slackId: string;
     score: {
-        osu: number,
-        taiko: number
-        fruits: number,
-        mania: number
-    }
-}[] = []
+        osu: number;
+        taiko: number;
+        fruits: number;
+        mania: number;
+    };
+}
+
+const cache: CacheUser[] = []
 
 const multiplayerRoundCache: any[] = [];
+
+const sentWarningDM = {
+    ref: false
+}
 
 async function cacheStuff(): Promise<void> {
     const token = await getTemporaryToken();
@@ -273,7 +285,49 @@ async function cacheStuff(): Promise<void> {
 
     const tohken = await getAccessToken("U06TBP41C3E") as string;
 
-    if (!tohken) return;
+    if (!tohken) {
+        const verifCode = `OSULEADERBOARD-U06TBP41C3E-${Date.now()}`;
+
+        states.set('U06TBP41C3E', verifCode);
+
+        const encodedCode = await bcrypt.hash(verifCode, 10);
+
+        await app.client.chat.postMessage({
+            channel: "U06TBP41C3E",
+            text: "uh oh, your token seems to have expired!! multiplayer round fetching + daily challenges are disabled.",
+            blocks: [
+                {
+                    type: 'section',
+                    text: {
+                        type: "mrkdwn",
+                        text: `uh oh, your token seems to have expired!! multiplayer round fetching + daily challenges are disabled.`
+                    }
+                },
+                {
+                    type: 'section',
+                    text: {
+                        type: "mrkdwn",
+                        text: `Please re-authenticate to generate it by clicking the Reauthenticate button.`
+                    },
+                    "accessory": {
+                        "type": "button",
+                        "text": {
+                            "type": "plain_text",
+                            "text": "Reauthenticate",
+                            "emoji": true
+                        },
+                        "value": "link",
+                        "url": `https://osu.ppy.sh/oauth/authorize?client_id=33126&redirect_uri=https://osu.haroon.hackclub.app/osu/callback&response_type=code&state=${encodeURIComponent("U06TBP41C3E:" + encodedCode)}&scope=public`,
+                        "action_id": "link"
+                    }
+                },
+            ]
+        })
+
+        sentWarningDM.ref = true;
+
+        return
+    };
 
     const rooms = await fetch(`https://osu.ppy.sh/api/v2/rooms?category=realtime`, {
         headers: {
@@ -489,16 +543,17 @@ app.command('/osu-profile', async (ctx) => {
 app.command('/osu-leaderboard', async (ctx) => {
     await ctx.ack();
 
-    const cached = splitArray<any>(cache.sort((a, b) => {
+    const cached = splitArray<CacheUser>(cache.sort((a, b) => {
         return b.score.osu - a.score.osu
     }), 10);
 
     const users = [];
 
-    for (let i in cached) {
+    for (let i in cached[0]) {
         try {
-            const cachedU = cached[i];
-            const slackProfile = (await ctx.client.users.info({ user: cachedU.slackId })).user!;
+            const cachedU = cached[0][i];
+            const slackInfo = await ctx.client.users.info({ user: cachedU.slackId })
+            const slackProfile = slackInfo.user!;
 
             users.push(`${users.length + 1}. <https://hackclub.slack.com/team/${slackProfile.id}|${slackProfile.profile!.display_name_normalized}> / <https://osu.ppy.sh/users/${cachedU.id}|${cachedU.username}> - ${cachedU.score.osu.toLocaleString()}`)
         } catch (e) {
@@ -602,7 +657,7 @@ app.action(/change-leaderboard\|.+/, async (ctx) => {
         return ctx.respond({ replace_original: false, response_type: "ephemeral", text: `This leaderboard was initialised by <@${userId}>. Only they can manage it.` })
     }
 
-    const selected = action.selected_option.value;
+    const selected = action.selected_option.value as "osu" | "taiko" | "fruits" | "mania";
 
     const cached = splitArray<any>(cache.sort((a, b) => {
         return b.score[selected] - a.score[selected]
@@ -878,6 +933,41 @@ app.command('/osu-search', async (ctx) => {
         });
     }
 
+    const accessToken = await getAccessToken(ctx.context.userId!);
+
+    if (!accessToken) {
+        const verifCode = `OSULEADERBOARD-${ctx.context.userId}-${Date.now()}`;
+
+        states.set(ctx.context.userId, verifCode);
+
+        const encodedCode = await bcrypt.hash(verifCode, 10);
+
+        return ctx.respond({
+            response_type: 'ephemeral',
+            text: `Hey <@${ctx.context.userId}>, your token has expired. Please re-authenticate to generate it by clicking the Reauthenticate button.`,
+            blocks: [
+                {
+                    type: 'section',
+                    text: {
+                        type: 'mrkdwn',
+                        text: `Hey <@${ctx.context.userId}>, your token has expired. Please re-authenticate to generate it by clicking the \`Reauthenticate\` button.`
+                    },
+                    "accessory": {
+                        "type": "button",
+                        "text": {
+                            "type": "plain_text",
+                            "text": "Reauthenticate",
+                            "emoji": true
+                        },
+                        "value": "link",
+                        "url": `https://osu.ppy.sh/oauth/authorize?client_id=33126&redirect_uri=https://osu.haroon.hackclub.app/osu/callback&response_type=code&state=${encodeURIComponent(ctx.context.userId + ":" + encodedCode)}&scope=public`,
+                        "action_id": "link"
+                    }
+                },
+            ]
+        });
+    }
+
     ctx.client.views.open({
         trigger_id: ctx.payload.trigger_id,
         view: {
@@ -1076,7 +1166,7 @@ app.view("search", async (ctx) => {
 
     const set = data.beatmapsets[0];
 
-    return ctx.client.chat.postMessage({
+    ctx.client.chat.postMessage({
         channel: ctx.view.private_metadata,
         "blocks": [
             {
@@ -1194,14 +1284,164 @@ async function debugDailyChallenge() {
     })
 }
 
-; (async () => {
-    await app.start(41691);
+type QueueJob = {
+    md5: string,
+    playerName: string,
+    ts: string,
+    userId: string
+}
 
-    console.log('⚡️ Bolt app is running!');
+const queue: QueueJob[] = []
+// key is renderID
+const waiting = new Map<number, QueueJob>()
 
-    cacheStuff();
+const processQueue = async () => {
+    if (queue.length > 0) {
+        const job = queue.shift()!;
 
-    setInterval(cacheStuff, 60 * 1000) // Cache every minute. Ratelimit is 1200 req/m anyways.
+        setTimeout(processQueue, 5000)
 
-    scheduleJob('30 5 0 * * *', debugDailyChallenge)
-})();
+        app.client.reactions.add({
+            channel: "C165V7XT9",
+            name: "thinkspin",
+            timestamp: job.ts
+        })
+
+        const render = await ordr.sendRender({
+            replay: `replay-${job.md5}.osr`,
+            skin: 'default',
+            username: job.playerName,
+            showDanserLogo: false,
+            resolution: '1280x720'
+        })
+
+        console.log(render)
+
+        // @ts-ignore Error code 0 DOES exist: https://ordr.issou.best/docs/#section/Error-codes
+        if (render.errorCode !== 0) {
+            app.client.chat.postEphemeral({
+                channel: "C165V7XT9",
+                user: job.userId,
+                text: `Hey: it looks like you posted a replay! Unfortunately, I couldn't generate a video of it: "${render.message}"`
+            })
+            return
+        }
+
+        waiting.set(render.renderID!, job);
+    }
+};
+
+const socket = io('https://apis.issou.best', {
+    path: '/ordr/ws',
+    autoConnect: false
+})
+
+socket.on('connect', () => {
+    console.log('Connected to ordr websocket!')
+})
+
+socket.on('disconnect', reason => {
+    if (reason == "io server disconnect") {
+        socket.connect()
+    }
+})
+
+socket.on('render_done_json', async (render) => {
+    const job = waiting.get(render.renderID!);
+
+    if (!job) return;
+
+    app.client.chat.postMessage({
+        channel: 'C165V7XT9',
+        thread_ts: job.ts,
+        reply_broadcast: true,
+        text: `<${render.videoUrl}|replay-${job.md5}.mp4>`,
+        unfurl_media: true
+    })
+
+    app.client.reactions.remove({
+        channel: "C165V7XT9",
+        name: "thinkspin",
+        timestamp: job.ts
+    })
+
+    waiting.delete(render.renderID!);
+})
+
+const addToQueue = (job: QueueJob) => {
+    queue.push(job);
+    if (queue.length === 1) {
+        processQueue();
+    }
+};
+
+app.event("message", async (ctx) => {
+    if (ctx.event.channel != "C165V7XT9") return;
+    if (ctx.event.subtype != "file_share") return;
+    const ts = ctx.event.ts;
+
+    const history = await ctx.client.conversations.history({
+        channel: "C165V7XT9",
+        latest: ts,
+        limit: 1,
+        inclusive: true
+    })
+
+    if (!(history.messages && history.messages.length > 0)) {
+        return;
+    }
+
+    const message = history.messages[0];
+
+    if (!message.files) return;
+    if (message.files.length === 0) return;
+
+    const replay = message.files.find(file => file.name?.endsWith(".osr"));
+
+    if (!replay) return;
+
+    const replayData = await fetch(replay.url_private_download!, {
+        headers: {
+            'Authorization': `Bearer ${process.env.SLACK_BOT_TOKEN}`
+        }
+    }).then(res => res.arrayBuffer());
+
+    const replayBuffer = Buffer.from(replayData);
+
+    const _replay = await osr.read(replayBuffer);
+
+    if (_replay.gameMode !== 0) {
+        ctx.client.chat.postEphemeral({
+            channel: "C165V7XT9",
+            user: ctx.context.userId!,
+            text: "Hey: it looks like you posted a replay! Unfortunately, it's not an :osu-standard: osu!standard replay, and so I can't generate a video of it. Sorry!"
+        })
+        return;
+    }
+
+    const replayFile = fs.createWriteStream(`replay-${_replay.replayMD5}.osr`);
+
+    replayFile.write(replayBuffer);
+    replayFile.end();
+
+    addToQueue({
+        md5: _replay.replayMD5,
+        playerName: _replay.playerName,
+        ts: ts,
+        userId: ctx.context.userId!
+    })
+})
+
+    ; (async () => {
+        await app.start(41691);
+
+        console.log('⚡️ Bolt app is running!');
+
+        socket.connect();
+
+        cacheStuff();
+
+        setInterval(cacheStuff, 60 * 1000) // Cache every minute. Ratelimit is 1200 req/m anyways.
+
+        scheduleJob('30 5 0 * * *', debugDailyChallenge)
+    })();

@@ -14,7 +14,10 @@
     "@types/node-schedule": "^2.1.7",
     "bcrypt": "^5.1.1",
     "dotenv": "^16.4.5",
+    "node-osr": "^1.2.1",
     "node-schedule": "^2.1.1",
-    "postgres": "^3.4.4"
+    "ordr.js": "^4.0.0",
+    "postgres": "^3.4.4",
+    "socket.io-client": "^4.8.1"
   }
 }
