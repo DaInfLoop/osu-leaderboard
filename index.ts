@@ -267,10 +267,10 @@ async function cacheStuff(): Promise<void> {
             id: user.id,
             slackId: osuUsers.find(v => v[0] == user.id)![1],
             score: {
-                osu: user.statistics_rulesets.osu?.total_score || 0,
-                taiko: user.statistics_rulesets.taiko?.total_score || 0,
-                fruits: user.statistics_rulesets.fruits?.total_score || 0,
-                mania: user.statistics_rulesets.mania?.total_score || 0,
+                osu: Math.floor(user.statistics_rulesets.osu?.pp) || 0,
+                taiko: Math.floor(user.statistics_rulesets.taiko?.pp) || 0,
+                fruits: Math.floor(user.statistics_rulesets.fruits?.pp) || 0,
+                mania: Math.floor(user.statistics_rulesets.mania?.pp) || 0,
             }
         })))
     }
@@ -1312,7 +1312,10 @@ const processQueue = async () => {
             skin: 'default',
             username: job.playerName,
             showDanserLogo: false,
-            resolution: '1280x720'
+            resolution: '1280x720',
+            introBGDim: 100,
+            inGameBGDim: 100,
+            breakBGDim: 100
         })
 
         console.log(render)
@@ -1424,12 +1427,15 @@ app.event("message", async (ctx) => {
     replayFile.write(replayBuffer);
     replayFile.end();
 
-    addToQueue({
-        md5: _replay.replayMD5,
-        playerName: _replay.playerName,
-        ts: ts,
-        userId: ctx.context.userId!
-    })
+
+    replayFile.on('finish', () => {
+        addToQueue({
+            md5: _replay.replayMD5,
+            playerName: _replay.playerName,
+            ts: ts,
+            userId: ctx.context.userId!
+        })
+    });
 })
 
     ; (async () => {
